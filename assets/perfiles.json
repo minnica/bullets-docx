@@ -1,0 +1,51 @@
+{
+  "universities": {
+    "IBERO": {
+      "filename_aliases": [
+        "Ibero"
+      ],
+      "text_color": "#2E2E2E",
+      "text_size": "16px",
+      "bullet_color": "#E00034",
+      "filename_degrees": {
+        "D": "Dip"
+      }
+    }
+  },
+  "degrees": {
+    "Dip": [
+      "diplomado",
+      "diplomados"
+    ],
+    "Mae": [
+      "maestría",
+      "maestrías"
+    ],
+    "Esp": [
+      "especialidad",
+      "especialidades",
+      "especialización",
+      "especializaciones"
+    ],
+    "Pos": [
+      "posgrado",
+      "posgrados"
+    ],
+    "Pre": [
+      "pregrado",
+      "pregrados"
+    ],
+    "Masters": [
+      "master",
+      "masters",
+      "máster",
+      "másters"
+    ],
+    "MBA": [
+      "mba"
+    ]
+  },
+  "subtitle_replacements": {
+    "Competencias (hacer código HTML)": "Competencias:"
+  }
+}
