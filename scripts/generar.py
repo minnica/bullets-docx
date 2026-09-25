@@ -355,6 +355,57 @@ def make_docx(template, destination, records):
             dest.writestr(entry, data)
 
 
+def validate_delivery(template, destination, records, source_dir):
+    """Comprobar el Word escrito antes de registrar una validación exitosa."""
+    def require(condition, message):
+        if not condition:
+            raise ValueError(f'Validación de {destination.name}: {message}')
+
+    with ZipFile(destination) as archive:
+        for name in archive.namelist():
+            if name.endswith('.xml'):
+                ET.fromstring(archive.read(name))
+        root = ET.fromstring(archive.read('word/document.xml'))
+    with ZipFile(template) as archive:
+        reference = ET.fromstring(archive.read('word/document.xml'))
+    require(ET.tostring(root.find('.//w:sectPr', NS)) ==
+            ET.tostring(reference.find('.//w:sectPr', NS)), 'configuración de página diferente.')
+    expected = []
+    for record in records:
+        require(hashlib.sha256((source_dir / record['source']).read_bytes()).hexdigest() ==
+                record['sha256'], 'el original cambió durante la generación.')
+        expected.extend([('', 'blank'), (record['title'], 'title')])
+        for section in record['sections']:
+            require(section['bullets'] == [capitalize_first(x) for x in section['raw']],
+                    'texto de bullets modificado.')
+            html_root = ET.fromstring(section['html'])
+            require([el.text for el in html_root.findall('.//li/span')] == section['bullets'],
+                    'el HTML no conserva los bullets.')
+            expected.extend([(section['subtitle'], 'subtitle'), ('', 'blank')])
+            expected.extend((line, 'code') for line in section['html'].splitlines())
+    paragraphs = root.findall('.//w:body/w:p', NS)
+    require(len(paragraphs) == len(expected), 'cantidad de párrafos incorrecta.')
+    for paragraph, (text, kind) in zip(paragraphs, expected):
+        actual = ''.join(t.text or '' for t in paragraph.findall('.//w:t', NS))
+        require(actual == text, 'contenido, orden o indentación incorrectos.')
+        props = paragraph.find('w:r/w:rPr', NS)
+        require(props is not None, 'faltan propiedades de fuente.')
+        def val(tag, attr='val'):
+            element = props.find('w:' + tag, NS)
+            return element.get(q(attr), '1') if element is not None else None
+        require(val('rFonts', 'ascii') == val('rFonts', 'hAnsi') == 'Aptos', 'fuente incorrecta.')
+        require(val('sz') == val('szCs') == ('18' if kind == 'code' else '24'), 'tamaño incorrecto.')
+        if kind in ('title', 'subtitle'):
+            require(val('b') == val('bCs') == '1', 'encabezado sin negritas.')
+            require(val('highlight') == ('yellow' if kind == 'title' else 'green'), 'resaltado incorrecto.')
+        else:
+            require(all(val(tag) == '0' for tag in ('b', 'bCs', 'i', 'iCs')) and
+                    val('u') == val('highlight') == 'none', 'código con adornos.')
+    return {'source_hashes_verified': True, 'text_verified': True,
+            'word_styles_verified': True, 'code_indentation_verified': True,
+            'page_settings_preserved': True}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', required=True, type=Path, help='Carpeta de DOCX originales (sin recursión)')
@@ -412,29 +463,26 @@ def main():
                'article{background:white;padding:24px;margin:24px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;'
                'font-size:12px;background:#f5f5f5;padding:16px}h2{font-size:22px}h3{font-size:18px}</style>',
                '<h1>Revisión de bullets</h1><p>Vista previa y fragmentos HTML de cada sección.</p>']
-    report = {'input': str(args.input.resolve()), 'files': len(files), 'deliveries': []}
+    report = {'input': str(args.input.resolve()), 'files': len(files), 'deliveries': [],
+              'visual_review': 'Pendiente: la validación automática comprueba contenido y XML; no revisa la apariencia.'}
     for (university, degree), records in sorted(groups.items()):
         stem = f'{university}_{len(records)}_{degree}'
-        folder = args.output / stem
-        folder.mkdir()
-        for n, record in enumerate(records, 1):
-            for j, section in enumerate(record['sections'], 1):
-                section['html_file'] = f'{stem}/{n:02d}_{j:02d}.html'
-                section['raw_file'] = f'{stem}/{n:02d}_{j:02d}.txt'
-                (args.output / section['html_file']).write_text(section['html'])
-                (args.output / section['raw_file']).write_text('\n'.join(section['bullets']) + '\n')
+        for record in records:
+            for section in record['sections']:
                 preview.extend(['<article>', '<h2>' + escape(record['title']) + '</h2>',
                                 '<h3>' + escape(section['subtitle']) + '</h3>', section['html'],
                                 '<details><summary>Ver HTML formateado</summary><pre>' + escape(section['html']) + '</pre></details></article>'])
         docx = args.output / (stem + '.docx')
         make_docx(args.template, docx, records)
+        checks = validate_delivery(args.template, docx, records, args.input)
         report['deliveries'].append({'docx': docx.name, 'documents': len(records),
                                     'sections': sum(len(r['sections']) for r in records),
                                     'bullets': sum(len(s['bullets']) for r in records for s in r['sections']),
-                                    'records': records})
+                                    'checks': checks,
+                                    'sources': [{'file': r['source'], 'sha256': r['sha256']} for r in records]})
     preview.append('</html>')
     (args.output / 'revision.html').write_text('\n'.join(preview))
-    (args.output / 'manifest.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
+    (args.output / 'validacion.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
     for delivery in report['deliveries']:
         print(f"{delivery['docx']}: {delivery['documents']} documentos, {delivery['sections']} secciones, {delivery['bullets']} bullets")
     print('Vista previa:', args.output / 'revision.html')

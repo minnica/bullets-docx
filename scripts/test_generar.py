@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
@@ -107,6 +108,26 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(rp.find('w:highlight', g.NS).get(g.q('val')), 'none')
             actual.append(''.join(t.text or '' for t in p.findall('.//w:t', g.NS)))
         self.assertEqual('\n'.join(actual) + '\n', html)
+
+    def test_delivery_contains_only_word_preview_and_validation(self):
+        paragraphs = g.word_paragraph('Diplomado de Prueba', 'title')
+        paragraphs += g.word_paragraph('Competencias', 'subtitle')
+        paragraphs += g.word_paragraph('<ul><li>aprender.</li><li>crear sin punto</li></ul>', 'code')
+        self.source(paragraphs)
+        output = self.root / 'salida'
+        with patch('sys.argv', ['generar.py', '--input', str(self.root), '--output', str(output)]):
+            g.main()
+        self.assertEqual({p.name for p in output.iterdir()},
+                         {'IBERO_1_Dip.docx', 'revision.html', 'validacion.json'})
+        report = json.loads((output / 'validacion.json').read_text())
+        delivery = report['deliveries'][0]
+        self.assertEqual((delivery['documents'], delivery['sections'], delivery['bullets']), (1, 1, 2))
+        self.assertTrue(all(delivery['checks'].values()))
+        self.assertIn('crear sin punto'.capitalize(), (output / 'revision.html').read_text())
+        record = g.extract(self.root / 'Ibero_PUJ_D_prueba.docx')
+        record['sections'][0].update(subtitle='Competencias', html=g.render_html(self.base, ['Texto incorrecto'], self.profile))
+        with self.assertRaisesRegex(ValueError, 'HTML no conserva'):
+            g.validate_delivery(g.ASSETS / 'plantilla.docx', output / 'IBERO_1_Dip.docx', [record], self.root)
 
 
 if __name__ == '__main__':
